@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>koyibhi - Random Video Chat</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="header-content">
+                <h1 class="site-name">koyibhi</h1>
+                <h2 class="tagline">Talk to strangers!</h2>
+                <div class="online-count">
+                    <span id="online-users">0</span>+ online now
+                </div>
+            </div>
+        </header>
+
+        <div class="main-content">
+            <div class="chat-section">
+                <div class="video-container">
+                    <div class="video-wrapper">
+                        <video id="local-video" autoplay muted playsinline></video>
+                        <div class="video-overlay">You</div>
+                    </div>
+                    <div class="video-wrapper">
+                        <video id="remote-video" autoplay playsinline></video>
+                        <div class="video-overlay">Stranger</div>
+                    </div>
+                </div>
+
+                <div class="chat-box">
+                    <div class="status-bar">
+                        <span id="camera-status" class="status">📷 Camera: Not Connected</span>
+                        <span id="mic-status" class="status">🎤 Mic: Not Connected</span>
+                    </div>
+                    <div id="messages" class="messages">
+                        <div class="message system">You're now chatting with a random stranger. Say hi!</div>
+                    </div>
+                    <div class="input-area">
+                        <input type="text" id="message-input" placeholder="Type a message...">
+                        <button id="send-button">Send</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="controls">
+                <div class="mode-selector">
+                    <button id="random-mode" class="mode-button active">Random Chat</button>
+                    <button id="code-mode" class="mode-button">Room Code</button>
+                </div>
+
+                <div id="room-code-container" class="room-code-container hidden">
+                    <div class="code-input-group">
+                        <input type="text" id="room-code-input" placeholder="Enter room code" maxlength="6">
+                        <button id="join-room">Join</button>
+                    </div>
+                    <div class="code-divider">or</div>
+                    <button id="create-room" class="create-room-btn">Create New Room</button>
+                    <div id="room-code-display" class="room-code-display hidden">
+                        Room code: <span id="room-code"></span>
+                        <button id="copy-code" class="copy-button">Copy</button>
+                    </div>
+                </div>
+
+                <div class="action-buttons">
+                    <button id="start-chat" class="primary-button">Start Chat</button>
+                    <button id="next-chat" class="secondary-button" disabled>Next</button>
+                    <button id="disconnect" class="stop-button" disabled>Stop</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="permissions-help hidden">
+            <p>⚠️ Camera/microphone access needed</p>
+            <ol>
+                <li>Click the camera icon in your browser's address bar</li>
+                <li>Allow access to camera and microphone</li>
+                <li>Reload the page</li>
+            </ol>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="app.js"></script>
+</body>
+</html> 
