@@ -6,6 +6,19 @@ const Filter = require('bad-words');
 const rateLimit = require('express-rate-limit');
 
 const app = express();
+
+// Trust proxy - required for Render deployment
+app.set('trust proxy', 1);
+
+// Rate limiting with proxy support
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+  standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
+  legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+  trustProxy: true // Trust the X-Forwarded-For header
+});
+
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
@@ -14,11 +27,7 @@ const io = socketIo(server, {
   }
 });
 
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100
-});
+// Apply rate limiter to all requests
 app.use(limiter);
 
 // Middleware
@@ -65,59 +74,105 @@ io.on('connection', (socket) => {
 
   // Handle creating a new room with code
   socket.on('create-room', () => {
-    const user = users.get(socket.id);
-    if (user.state !== UserState.DISCONNECTED) {
-      leaveCurrentRoom(socket);
+    try {
+      const user = users.get(socket.id);
+      if (!user) {
+        socket.emit('room-error', 'User not found');
+        return;
+      }
+
+      if (user.state !== UserState.DISCONNECTED) {
+        leaveCurrentRoom(socket);
+      }
+
+      const roomId = generateRoomCode();
+      
+      // Create new room
+      rooms.set(roomId, { 
+        users: [socket.id],
+        type: 'code',
+        createdAt: Date.now()
+      });
+
+      // Update user state
+      user.state = UserState.WAITING;
+      user.roomId = roomId;
+      user.partnerId = null;
+      
+      // Join socket.io room
+      socket.join(roomId);
+      socket.roomId = roomId;
+      
+      console.log(`Room ${roomId} created by user ${socket.id}`);
+      socket.emit('room-created', roomId);
+    } catch (error) {
+      console.error('Error creating room:', error);
+      socket.emit('room-error', 'Failed to create room');
     }
-
-    const roomId = generateRoomCode();
-    rooms.set(roomId, { 
-      users: [socket.id],
-      type: 'code'
-    });
-
-    user.state = UserState.WAITING;
-    user.roomId = roomId;
-    socket.roomId = roomId;
-    socket.join(roomId);
-    socket.emit('room-created', roomId);
   });
 
   // Handle joining a room with code
-  socket.on('join-room', (roomId) => {
-    if (!rooms.has(roomId)) {
-      socket.emit('room-error', 'Room not found');
-      return;
+  socket.on('join-room', ({ roomId }) => {
+    try {
+      if (!roomId || typeof roomId !== 'string') {
+        socket.emit('room-error', 'Invalid room code');
+        return;
+      }
+
+      const normalizedRoomId = roomId.toUpperCase();
+      if (!rooms.has(normalizedRoomId)) {
+        socket.emit('room-error', 'Room not found');
+        return;
+      }
+
+      const room = rooms.get(normalizedRoomId);
+      if (room.users.length >= 2) {
+        socket.emit('room-error', 'Room is full');
+        return;
+      }
+
+      const user = users.get(socket.id);
+      if (!user) {
+        socket.emit('room-error', 'User not found');
+        return;
+      }
+
+      // Check if user is trying to join their own room
+      if (room.users.includes(socket.id)) {
+        socket.emit('room-error', 'Cannot join your own room');
+        return;
+      }
+
+      if (user.state !== UserState.DISCONNECTED) {
+        leaveCurrentRoom(socket);
+      }
+
+      const partnerId = room.users[0];
+      room.users.push(socket.id);
+      
+      // Update both users' states
+      user.state = UserState.IN_CHAT;
+      user.roomId = normalizedRoomId;
+      user.partnerId = partnerId;
+      
+      const partner = users.get(partnerId);
+      if (partner) {
+        partner.state = UserState.IN_CHAT;
+        partner.partnerId = socket.id;
+      }
+
+      socket.roomId = normalizedRoomId;
+      socket.join(normalizedRoomId);
+      
+      // Notify both users
+      io.to(normalizedRoomId).emit('chat-start', { roomId: normalizedRoomId });
+      socket.emit('initiator', true);
+
+      console.log(`User ${socket.id} joined room ${normalizedRoomId}`);
+    } catch (error) {
+      console.error('Error joining room:', error);
+      socket.emit('room-error', 'Failed to join room');
     }
-
-    const room = rooms.get(roomId);
-    if (room.users.length >= 2) {
-      socket.emit('room-error', 'Room is full');
-      return;
-    }
-
-    const user = users.get(socket.id);
-    if (user.state !== UserState.DISCONNECTED) {
-      leaveCurrentRoom(socket);
-    }
-
-    const partnerId = room.users[0];
-    room.users.push(socket.id);
-    
-    // Update both users' states
-    user.state = UserState.IN_CHAT;
-    user.roomId = roomId;
-    user.partnerId = partnerId;
-    
-    const partner = users.get(partnerId);
-    partner.state = UserState.IN_CHAT;
-    partner.partnerId = socket.id;
-
-    socket.roomId = roomId;
-    socket.join(roomId);
-    
-    io.to(roomId).emit('chat-start', { roomId });
-    socket.emit('initiator', true);
   });
 
   // Handle random chat matchmaking
@@ -190,7 +245,9 @@ io.on('connection', (socket) => {
     const user = users.get(socket.id);
     if (user?.state === UserState.IN_CHAT && user.roomId === roomId) {
       try {
+        // Send offer to the other user in the room
         socket.to(roomId).emit('offer', { offer });
+        console.log(`Offer sent in room ${roomId}`);
       } catch (error) {
         console.error('Error sending offer:', error);
         socket.emit('error', 'Failed to send offer');
@@ -202,7 +259,9 @@ io.on('connection', (socket) => {
     const user = users.get(socket.id);
     if (user?.state === UserState.IN_CHAT && user.roomId === roomId) {
       try {
+        // Send answer to the other user in the room
         socket.to(roomId).emit('answer', { answer });
+        console.log(`Answer sent in room ${roomId}`);
       } catch (error) {
         console.error('Error sending answer:', error);
         socket.emit('error', 'Failed to send answer');
@@ -214,7 +273,9 @@ io.on('connection', (socket) => {
     const user = users.get(socket.id);
     if (user?.state === UserState.IN_CHAT && user.roomId === roomId) {
       try {
+        // Send ICE candidate to the other user in the room
         socket.to(roomId).emit('ice-candidate', { candidate });
+        console.log(`ICE candidate sent in room ${roomId}`);
       } catch (error) {
         console.error('Error sending ICE candidate:', error);
         socket.emit('error', 'Failed to send ICE candidate');

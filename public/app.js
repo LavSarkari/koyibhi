@@ -6,7 +6,7 @@ let currentRoomId;
 // DOM Elements
 const localVideo = document.getElementById('local-video');
 const remoteVideo = document.getElementById('remote-video');
-const messagesContainer = document.getElementById('messages');
+const messagesDiv = document.getElementById('messages');
 const messageInput = document.getElementById('message-input');
 const sendButton = document.getElementById('send-button');
 const startChatButton = document.getElementById('start-chat');
@@ -14,17 +14,11 @@ const nextChatButton = document.getElementById('next-chat');
 const disconnectButton = document.getElementById('disconnect');
 const cameraStatus = document.getElementById('camera-status');
 const micStatus = document.getElementById('mic-status');
+const autoConnectCheckbox = document.getElementById('auto-connect');
 
-// Room code elements
-const randomModeBtn = document.getElementById('random-mode');
-const codeModeBtn = document.getElementById('code-mode');
-const roomCodeContainer = document.getElementById('room-code-container');
-const roomCodeInput = document.getElementById('room-code-input');
-const joinRoomBtn = document.getElementById('join-room');
-const createRoomBtn = document.getElementById('create-room');
-const roomCodeDisplay = document.getElementById('room-code-display');
-const roomCodeSpan = document.getElementById('room-code');
-const copyCodeBtn = document.getElementById('copy-code');
+// Initialize controls
+messageInput.disabled = true;
+sendButton.disabled = true;
 
 // Configuration for WebRTC
 const configuration = {
@@ -33,58 +27,21 @@ const configuration = {
     ]
 };
 
-// Chat mode handling
-let isRandomMode = true;
+// Initialize buttons
+startChatButton.addEventListener('click', startChat);
+nextChatButton.addEventListener('click', nextChat);
+disconnectButton.addEventListener('click', disconnect);
+sendButton.addEventListener('click', sendMessage);
 
-randomModeBtn.addEventListener('click', () => {
-    isRandomMode = true;
-    randomModeBtn.classList.add('active');
-    codeModeBtn.classList.remove('active');
-    roomCodeContainer.classList.add('hidden');
-    startChatButton.textContent = 'Start Random Chat';
-    roomCodeDisplay.classList.add('hidden');
-    roomCodeInput.value = '';
-});
-
-codeModeBtn.addEventListener('click', () => {
-    isRandomMode = false;
-    codeModeBtn.classList.add('active');
-    randomModeBtn.classList.remove('active');
-    roomCodeContainer.classList.remove('hidden');
-    startChatButton.textContent = 'Start Room Chat';
-});
-
-// Room code handling
-createRoomBtn.addEventListener('click', () => {
-    if (!localStream) {
-        showMessage('Please allow camera and microphone access first');
-        return;
-    }
-    socket.emit('create-room');
-});
-
-joinRoomBtn.addEventListener('click', () => {
-    if (!localStream) {
-        showMessage('Please allow camera and microphone access first');
-        return;
-    }
-    const code = roomCodeInput.value.trim().toUpperCase();
-    if (code) {
-        socket.emit('join-room', code);
-    } else {
-        showMessage('Please enter a room code');
+messageInput.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter' && !messageInput.disabled) {
+        sendMessage();
     }
 });
 
-copyCodeBtn.addEventListener('click', () => {
-    navigator.clipboard.writeText(roomCodeSpan.textContent)
-        .then(() => {
-            const originalText = copyCodeBtn.textContent;
-            copyCodeBtn.textContent = 'Copied!';
-            setTimeout(() => {
-                copyCodeBtn.textContent = originalText;
-            }, 2000);
-        });
+// Socket.IO event handlers
+socket.on('waiting', () => {
+    showMessage('Waiting for a partner...');
 });
 
 socket.on('chat-start', ({ roomId }) => {
@@ -94,6 +51,8 @@ socket.on('chat-start', ({ roomId }) => {
     startChatButton.disabled = true;
     nextChatButton.disabled = false;
     disconnectButton.disabled = false;
+    messageInput.disabled = false;
+    sendButton.disabled = false;
 });
 
 socket.on('initiator', (isInitiator) => {
@@ -102,53 +61,24 @@ socket.on('initiator', (isInitiator) => {
     }
 });
 
-socket.on('room-created', (roomCode) => {
-    roomCodeSpan.textContent = roomCode;
-    roomCodeDisplay.classList.remove('hidden');
-    showMessage('Room created! Share this code with your partner.');
-});
-
-socket.on('room-error', (error) => {
-    showMessage(error);
-    startChatButton.disabled = false;
-    nextChatButton.disabled = true;
-    disconnectButton.disabled = true;
-});
-
-socket.on('room-joined', ({ roomId, partnerId }) => {
-    currentRoomId = roomId;
-    showMessage('Connected to room! Starting video chat...');
-    setupWebRTC();
-});
-
-socket.on('partner-joined', ({ roomId, partnerId }) => {
-    currentRoomId = roomId;
-    showMessage('Partner joined the room! Starting video chat...');
-});
-
-// Initialize buttons
-startChatButton.addEventListener('click', startChat);
-nextChatButton.addEventListener('click', nextChat);
-disconnectButton.addEventListener('click', disconnect);
-sendButton.addEventListener('click', sendMessage);
-messageInput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') sendMessage();
-});
-
-// Socket.IO event handlers
-socket.on('waiting', () => {
-    showMessage('Waiting for a partner...');
-});
-
-socket.on('partner-found', ({ roomId, partnerId }) => {
-    currentRoomId = roomId;
-    showMessage('Partner found! Starting video chat...');
-    setupWebRTC();
-});
-
 socket.on('partner-disconnected', () => {
     showMessage('Partner disconnected');
     cleanup();
+    startChatButton.disabled = false;
+    nextChatButton.disabled = true;
+    disconnectButton.disabled = true;
+    messageInput.disabled = true;
+    sendButton.disabled = true;
+
+    // Auto-connect if enabled
+    if (autoConnectCheckbox.checked) {
+        showMessage('Auto-connecting in 1 second...');
+        autoConnectTimeout = setTimeout(() => {
+            if (autoConnectCheckbox.checked) {
+                socket.emit('find-random-partner');
+            }
+        }, 1000);
+    }
 });
 
 socket.on('receive-message', ({ message, timestamp }) => {
@@ -156,28 +86,37 @@ socket.on('receive-message', ({ message, timestamp }) => {
 });
 
 // WebRTC event handlers
-socket.on('offer', async (offer) => {
+socket.on('offer', async ({ offer }) => {
     try {
+        if (!peerConnection) {
+            setupWebRTC();
+        }
         await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
         const answer = await peerConnection.createAnswer();
         await peerConnection.setLocalDescription(answer);
         socket.emit('answer', { roomId: currentRoomId, answer });
     } catch (error) {
         console.error('Error handling offer:', error);
+        showMessage('Failed to establish video connection');
     }
 });
 
-socket.on('answer', async (answer) => {
+socket.on('answer', async ({ answer }) => {
     try {
-        await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+        if (peerConnection) {
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+        }
     } catch (error) {
         console.error('Error handling answer:', error);
+        showMessage('Failed to establish video connection');
     }
 });
 
-socket.on('ice-candidate', async (candidate) => {
+socket.on('ice-candidate', async ({ candidate }) => {
     try {
-        await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        if (peerConnection) {
+            await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        }
     } catch (error) {
         console.error('Error adding ICE candidate:', error);
     }
@@ -215,12 +154,7 @@ async function startChat() {
         updateDeviceStatus('mic', true);
         localVideo.srcObject = localStream;
         
-        if (isRandomMode) {
-            socket.emit('find-random-partner');
-        } else {
-            showMessage('Please create a room or enter a room code to join');
-            roomCodeContainer.classList.remove('hidden');
-        }
+        socket.emit('find-random-partner');
 
     } catch (error) {
         handleMediaError(error);
@@ -228,32 +162,64 @@ async function startChat() {
 }
 
 function setupWebRTC() {
-    peerConnection = new RTCPeerConnection(configuration);
-
-    // Add local stream to peer connection
-    localStream.getTracks().forEach(track => {
-        peerConnection.addTrack(track, localStream);
-    });
-
-    // Handle remote stream
-    peerConnection.ontrack = (event) => {
-        remoteVideo.srcObject = event.streams[0];
-    };
-
-    // Handle ICE candidates
-    peerConnection.onicecandidate = (event) => {
-        if (event.candidate) {
-            socket.emit('ice-candidate', { roomId: currentRoomId, candidate: event.candidate });
+    try {
+        if (peerConnection) {
+            peerConnection.close();
         }
-    };
+        peerConnection = new RTCPeerConnection(configuration);
 
-    // Create and send offer if we're the initiator
-    createAndSendOffer();
+        // Add local stream to peer connection
+        if (localStream) {
+            localStream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, localStream);
+            });
+        }
+
+        // Handle remote stream
+        peerConnection.ontrack = (event) => {
+            console.log('Received remote track:', event.track.kind);
+            if (remoteVideo.srcObject !== event.streams[0]) {
+                remoteVideo.srcObject = event.streams[0];
+            }
+        };
+
+        // Handle ICE candidates
+        peerConnection.onicecandidate = (event) => {
+            if (event.candidate) {
+                socket.emit('ice-candidate', {
+                    roomId: currentRoomId,
+                    candidate: event.candidate
+                });
+            }
+        };
+
+        // Log connection state changes
+        peerConnection.oniceconnectionstatechange = () => {
+            console.log('ICE Connection State:', peerConnection.iceConnectionState);
+        };
+
+        peerConnection.onconnectionstatechange = () => {
+            console.log('Connection State:', peerConnection.connectionState);
+            if (peerConnection.connectionState === 'connected') {
+                showMessage('Video connection established!');
+            }
+        };
+
+    } catch (error) {
+        console.error('Error setting up WebRTC:', error);
+        showMessage('Failed to setup video chat');
+    }
 }
 
 async function createAndSendOffer() {
     try {
-        const offer = await peerConnection.createOffer();
+        if (!peerConnection) {
+            setupWebRTC();
+        }
+        const offer = await peerConnection.createOffer({
+            offerToReceiveAudio: true,
+            offerToReceiveVideo: true
+        });
         await peerConnection.setLocalDescription(offer);
         socket.emit('offer', { roomId: currentRoomId, offer });
     } catch (error) {
@@ -264,13 +230,10 @@ async function createAndSendOffer() {
 
 function nextChat() {
     cleanup();
-    if (isRandomMode) {
-        socket.emit('find-random-partner');
-    } else {
-        showMessage('Please enter a new room code or create a new room');
-        roomCodeInput.value = '';
-        roomCodeDisplay.classList.add('hidden');
-        startChatButton.disabled = false;
+    socket.emit('find-random-partner');
+    if (!autoConnectCheckbox.checked) {
+        // Only show this message if not auto-connecting
+        showMessage('Looking for a new partner...');
     }
 }
 
@@ -279,11 +242,23 @@ function disconnect() {
     startChatButton.disabled = false;
     nextChatButton.disabled = true;
     disconnectButton.disabled = true;
+    messageInput.disabled = true;
+    sendButton.disabled = true;
     showMessage('Disconnected from chat');
+    
+    // Clear any pending auto-connect
+    if (autoConnectTimeout) {
+        clearTimeout(autoConnectTimeout);
+        autoConnectTimeout = null;
+    }
 }
 
 function cleanup() {
     if (peerConnection) {
+        peerConnection.ontrack = null;
+        peerConnection.onicecandidate = null;
+        peerConnection.oniceconnectionstatechange = null;
+        peerConnection.onconnectionstatechange = null;
         peerConnection.close();
         peerConnection = null;
     }
@@ -295,12 +270,17 @@ function cleanup() {
         socket.emit('leave-room');
         currentRoomId = null;
     }
-    roomCodeDisplay.classList.add('hidden');
-    roomCodeInput.value = '';
+    messageInput.disabled = true;
+    sendButton.disabled = true;
+
+    // Clear any pending auto-connect
+    if (autoConnectTimeout) {
+        clearTimeout(autoConnectTimeout);
+        autoConnectTimeout = null;
+    }
 }
 
 function sendMessage() {
-    const messageInput = document.getElementById('message-input');
     const message = messageInput.value.trim();
     
     if (!message) return;
@@ -337,6 +317,7 @@ function addMessage(sender, text) {
 }
 
 function showMessage(message) {
+    console.log('Status message:', message);
     const statusDiv = document.getElementById('status');
     if (statusDiv) {
         const messageElement = document.createElement('div');
@@ -345,7 +326,6 @@ function showMessage(message) {
         statusDiv.appendChild(messageElement);
         statusDiv.scrollTop = statusDiv.scrollHeight;
         
-        // Remove message after 5 seconds
         setTimeout(() => {
             messageElement.remove();
         }, 5000);
@@ -358,11 +338,6 @@ socket.on('user-count', (count) => {
     if (onlineUsers) {
         onlineUsers.textContent = count;
     }
-});
-
-// Handle room code input formatting
-roomCodeInput.addEventListener('input', (e) => {
-    e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
 });
 
 // Show permissions help when needed
@@ -397,35 +372,5 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-// Update error handling for media access
-async function setupMedia() {
-    try {
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-            throw new Error('Your browser does not support video chat');
-        }
-
-        const stream = await navigator.mediaDevices.getUserMedia({
-            video: {
-                width: { ideal: 1280 },
-                height: { ideal: 720 }
-            },
-            audio: true
-        });
-
-        document.getElementById('local-video').srcObject = stream;
-        return stream;
-    } catch (error) {
-        let errorMessage = 'Failed to access camera/microphone';
-        
-        if (error.name === 'NotAllowedError') {
-            errorMessage = 'Please allow camera and microphone access';
-        } else if (error.name === 'NotFoundError') {
-            errorMessage = 'Camera or microphone not found';
-        } else if (error.name === 'NotReadableError') {
-            errorMessage = 'Camera or microphone is already in use';
-        }
-        
-        showMessage(errorMessage);
-        throw error;
-    }
-} 
+// Add after socket event handlers
+let autoConnectTimeout;
