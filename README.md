@@ -28,7 +28,7 @@ Before running this project, make sure you have:
 
 1. Clone the repository:
 ```bash
-git clone [your-repository-url]
+git clone https://github.com/LavSarkari/koyibhi/
 cd omegle-clone
 ```
 
